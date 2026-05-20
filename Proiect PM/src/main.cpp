@@ -9,8 +9,8 @@ RTC_DS3231 rtc;
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 HX711 scale;
 
-const int pinButon1 = 2; // PD2 / INT0 (Start/Stop/Pauza)
-const int pinButon2 = 3; // PD3 / INT1 (Schimbare Afisaj)
+const int pinButon1 = 2; // PD2 / INT0 (Start/Stop/+50)
+const int pinButon2 = 3; // PD3 / INT1 (Schimbare Afisaj/OK)
 const int pinReleu = A1; // Pompa de apa
 const int pinDT = A2;    // HX711 Data
 const int pinSCK = A3;   // HX711 Clock
@@ -19,7 +19,9 @@ const int piniLed[] = {0, 1, 4, 5, 6, 7, 8, 9, 10, 11};
 const int numarLeduri = 10;
 
 const float FACTOR_CALIBRARE = 1100.0;
-const float TINTA_APA_ML = 250.0; 
+
+int stareSistem = 0; 
+int volumSelectat = 50;
 
 float greutateCurenta = 0.0;
 float greutateStart = 0.0;
@@ -28,10 +30,8 @@ float apaTurnataCurent = 0.0;
 const int ADRESA_ZIUA = 0; 
 const int ADRESA_APA = 5;  
 
-bool pompaPornita = false;
 unsigned long totalApaZiMl = 0;      
 int ziuaAnterioara = -1;             
-
 int modAfisaj = 0;                   
 unsigned long ultimulRefreshLCD = 0; 
 
@@ -39,7 +39,8 @@ volatile bool flagBtn1 = false;
 volatile bool flagBtn2 = false;
 volatile unsigned long ultimulTimpB1 = 0;
 volatile unsigned long ultimulTimpB2 = 0;
-const unsigned long timpDebounce = 200;
+const unsigned long timpDebounce = 200; 
+
 void ISR_Btn1() {
   unsigned long timp = millis();
   if (timp - ultimulTimpB1 > timpDebounce) {
@@ -67,6 +68,7 @@ void setup() {
   pinMode(pinButon2, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(pinButon1), ISR_Btn1, FALLING);
   attachInterrupt(digitalPinToInterrupt(pinButon2), ISR_Btn2, FALLING);
+
   pinMode(pinReleu, OUTPUT);
   digitalWrite(pinReleu, LOW);
 
@@ -82,10 +84,13 @@ void setup() {
   
   lcd.setCursor(0, 0);
   lcd.print("Pornire cantar..");
+  lcd.setCursor(0, 1);
+  lcd.print("Asteapta putin..");
+  
   scale.begin(pinDT, pinSCK);
   scale.set_scale(FACTOR_CALIBRARE);
   scale.tare(); 
-  delay(1000);
+  
   lcd.clear();
   
   DateTime now = rtc.now();
@@ -126,98 +131,149 @@ void loop() {
   if (flagBtn1) {
     flagBtn1 = false;
     
-    if (pompaPornita == false) {
-      pompaPornita = true;
-      digitalWrite(pinReleu, HIGH);
-      
-      if (apaTurnataCurent == 0) {
-        greutateStart = greutateCurenta;
+    if (stareSistem == 0) {
+      volumSelectat += 50;
+      if (volumSelectat > 1000) {
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print(" EROARE! Maxim  ");
+        lcd.setCursor(0,1);
+        lcd.print(" admis: 1000 ml ");
+        delay(2500);
+        volumSelectat = 50;
+        lcd.clear();
       }
+    } 
+    else if (stareSistem == 1) {
+      if (greutateCurenta < 10.0) {
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print("Pune o sticla pe");
+        lcd.setCursor(0,1);
+        lcd.print("cantar intai!");
+        delay(2000);
+        lcd.clear();
+      } else {
+        greutateStart = greutateCurenta;
+        stareSistem = 2;
+        digitalWrite(pinReleu, HIGH);
+        lcd.clear();
+      }
+    }
+    else if (stareSistem == 2) {
+      stareSistem = 3;
+      digitalWrite(pinReleu, LOW);
       lcd.clear();
-    } else {
-      pompaPornita = false;
-      digitalWrite(pinReleu, LOW); 
+    }
+    else if (stareSistem == 3) {
+      stareSistem = 2;
+      digitalWrite(pinReleu, HIGH);
       lcd.clear();
     }
   }
+
   if (flagBtn2) {
     flagBtn2 = false;
-    modAfisaj = !modAfisaj;
-    lcd.clear();
+    
+    if (stareSistem == 0) {
+      stareSistem = 1;
+      lcd.clear();
+    } else {
+      modAfisaj = !modAfisaj;
+      lcd.clear();
+    }
   }
-  if (pompaPornita == true) {
+
+  if (stareSistem == 2) {
     apaTurnataCurent = greutateCurenta - greutateStart;
     if (apaTurnataCurent < 0) apaTurnataCurent = 0;
-
-    if (apaTurnataCurent >= TINTA_APA_ML) {
-      pompaPornita = false;
+    if (apaTurnataCurent >= volumSelectat) {
+      stareSistem = 4; 
       digitalWrite(pinReleu, LOW); 
       
-      totalApaZiMl += (unsigned long)TINTA_APA_ML; 
+      totalApaZiMl += (unsigned long)volumSelectat; 
       EEPROM.put(ADRESA_APA, totalApaZiMl);
       
-      apaTurnataCurent = 0;
       stingeToateLedurile();
-      
       lcd.clear();
+    }
+  }
+
+  if (stareSistem == 4 && greutateCurenta < 10.0) {
+    apaTurnataCurent = 0;
+    greutateStart = 0;
+    stareSistem = 0;
+    volumSelectat = 50; 
+    lcd.clear();
+  }
+
+  if ((stareSistem == 2 || stareSistem == 3) && apaTurnataCurent > 0) {
+    int leduriDeAprins = (apaTurnataCurent * numarLeduri) / volumSelectat;
+    
+    for (int i = 0; i < numarLeduri; i++) {
+      if (i < leduriDeAprins) digitalWrite(piniLed[i], HIGH);
+      else digitalWrite(piniLed[i], LOW);
+    }
+  }
+
+  if (millis() - ultimulRefreshLCD > 300) {
+    ultimulRefreshLCD = millis();
+
+    if (stareSistem == 0) {
+      lcd.setCursor(0, 0);
+      lcd.print("Volum sticla:   "); 
+      lcd.setCursor(0, 1);
+      char rand1[17];
+      sprintf(rand1, "    %4d ml      ", volumSelectat); 
+      lcd.print(rand1);
+    }
+    else if (stareSistem == 4) {
       lcd.setCursor(0, 0);
       lcd.print("  Sticla Plina! ");
       lcd.setCursor(0, 1);
-      lcd.print("   ( 250 ML )   ");
-      delay(3000); 
-      lcd.clear();
+      lcd.print(" Ridica sticla. ");
     }
-  }
+    else {
+      if (modAfisaj == 0) {
+        if (stareSistem == 1) {
+          lcd.setCursor(0, 0);
+          char rand0[17];
+          sprintf(rand0, "Setat:  %4d ml ", volumSelectat);
+          lcd.print(rand0);
+          
+          lcd.setCursor(0, 1);
+          char rand1[17];
+          sprintf(rand1, "Masa:   %4d g  ", (int)greutateCurenta);
+          lcd.print(rand1);
+        } 
+        else if (stareSistem == 2 || stareSistem == 3) {
+          lcd.setCursor(0, 0);
+          char rand0[17];
+          sprintf(rand0, "Tinta:  %4d ml ", volumSelectat);
+          lcd.print(rand0);
 
-  if (apaTurnataCurent > 0 && pompaPornita) {
-    int leduriDeAprins = (apaTurnataCurent * numarLeduri) / TINTA_APA_ML;
-    for (int i = 0; i < numarLeduri; i++) {
-      if (i < leduriDeAprins) {
-        digitalWrite(piniLed[i], HIGH);
-      } else {
-        digitalWrite(piniLed[i], LOW);
-      }
-    }
-  }
-
-  if (millis() - ultimulRefreshLCD > 500) {
-    ultimulRefreshLCD = millis();
-
-    if (modAfisaj == 0) {
-      
-      if (pompaPornita == false && apaTurnataCurent == 0) {
-        lcd.setCursor(0, 0);
-        lcd.print("Pune sticla...  ");
-        lcd.setCursor(0, 1);
-        char rand1[17];
-        sprintf(rand1, "Masa: %4d g   ", (int)greutateCurenta);
-        lcd.print(rand1);
-      } 
-      else {
-        lcd.setCursor(0, 0);
-        lcd.print("Tinta: 250 ml   ");
-
-        lcd.setCursor(0, 1);
-        char rand1[17];
-        if (pompaPornita) {
-          sprintf(rand1, "Turnat: %3d ml ", (int)apaTurnataCurent);
-        } else {
-          sprintf(rand1, "PAUZA:  %3d ml ", (int)apaTurnataCurent);
+          lcd.setCursor(0, 1);
+          char rand1[17];
+          if (stareSistem == 2) {
+            sprintf(rand1, "Turnat: %4d ml ", (int)apaTurnataCurent);
+          } else {
+            sprintf(rand1, "PAUZA:  %4d ml ", (int)apaTurnataCurent);
+          }
+          lcd.print(rand1);
         }
+      } else {
+        lcd.setCursor(0, 0);
+        char rand0[17];
+        sprintf(rand0, "%02d:%02d %02d/%02d    ", now.hour(), now.minute(), now.day(), now.month());
+        lcd.print(rand0);
+
+        lcd.setCursor(0, 1);
+        char rand1[17];
+        unsigned long totalDisplay = totalApaZiMl;
+        if (stareSistem == 2 || stareSistem == 3) totalDisplay += (unsigned long)apaTurnataCurent;
+        sprintf(rand1, "Baut azi:%4lu ml", totalDisplay);
         lcd.print(rand1);
       }
-
-    } else {
-      lcd.setCursor(0, 0);
-      char rand0[17];
-      sprintf(rand0, "%02d:%02d %02d/%02d    ", now.hour(), now.minute(), now.day(), now.month());
-      lcd.print(rand0);
-
-      lcd.setCursor(0, 1);
-      char rand1[17];
-      unsigned long totalDisplay = totalApaZiMl + (unsigned long)apaTurnataCurent;
-      sprintf(rand1, "Baut azi:%4lu ml", totalDisplay);
-      lcd.print(rand1);
     }
   }
 }
