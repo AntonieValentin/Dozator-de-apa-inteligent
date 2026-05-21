@@ -10,7 +10,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 HX711 scale;
 
 const int pinButon1 = 2; // PD2 / INT0 (Start/Stop/+50)
-const int pinButon2 = 3; // PD3 / INT1 (Schimbare Afisaj/OK)
+const int pinButon2 = 3; // PD3 / INT1 (Schimbare Afișaj/OK)
 const int pinReleu = A1; // Pompa de apa
 const int pinDT = A2;    // HX711 Data
 const int pinSCK = A3;   // HX711 Clock
@@ -18,14 +18,15 @@ const int pinSCK = A3;   // HX711 Clock
 const int piniLed[] = {0, 1, 4, 5, 6, 7, 8, 9, 10, 11};
 const int numarLeduri = 10;
 
-const float FACTOR_CALIBRARE = 1100.0;
+const float FACTOR_CALIBRARE = 1135.0;
 
 int stareSistem = 0; 
-int volumSelectat = 50;
+int volumSelectat = 50; 
 
 float greutateCurenta = 0.0;
 float greutateStart = 0.0;
 float apaTurnataCurent = 0.0;
+float cantitateDeTurnat = 0.0; 
 
 const int ADRESA_ZIUA = 0; 
 const int ADRESA_APA = 5;  
@@ -91,6 +92,7 @@ void setup() {
   scale.set_scale(FACTOR_CALIBRARE);
   scale.tare(); 
   
+  delay(500); 
   lcd.clear();
   
   DateTime now = rtc.now();
@@ -98,29 +100,33 @@ void setup() {
   EEPROM.get(ADRESA_ZIUA, ziuaAnterioara);
   EEPROM.get(ADRESA_APA, totalApaZiMl);
 
-  if (ziuaAnterioara < 1 || ziuaAnterioara > 31) {
-    ziuaAnterioara = now.day();
-    totalApaZiMl = 0;
-    EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
-    EEPROM.put(ADRESA_APA, totalApaZiMl);
-  }
-  
-  if (now.day() != ziuaAnterioara) {
-    totalApaZiMl = 0;
-    ziuaAnterioara = now.day();
-    EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
-    EEPROM.put(ADRESA_APA, totalApaZiMl);
+  if (now.day() >= 1 && now.day() <= 31 && now.year() >= 2020) {
+    if (ziuaAnterioara < 1 || ziuaAnterioara > 31) {
+      ziuaAnterioara = now.day();
+      totalApaZiMl = 0;
+      EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
+      EEPROM.put(ADRESA_APA, totalApaZiMl);
+    }
+    
+    if (now.day() != ziuaAnterioara) {
+      totalApaZiMl = 0;
+      ziuaAnterioara = now.day();
+      EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
+      EEPROM.put(ADRESA_APA, totalApaZiMl);
+    }
   }
 }
 
 void loop() {
   DateTime now = rtc.now();
 
-  if (now.day() != ziuaAnterioara) {
-    totalApaZiMl = 0;
-    ziuaAnterioara = now.day();
-    EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
-    EEPROM.put(ADRESA_APA, totalApaZiMl);
+  if (now.day() >= 1 && now.day() <= 31 && now.year() >= 2020) {
+    if (now.day() != ziuaAnterioara) {
+      totalApaZiMl = 0;
+      ziuaAnterioara = now.day();
+      EEPROM.put(ADRESA_ZIUA, ziuaAnterioara);
+      EEPROM.put(ADRESA_APA, totalApaZiMl);
+    }
   }
 
   if (scale.is_ready()) {
@@ -140,7 +146,7 @@ void loop() {
         lcd.setCursor(0,1);
         lcd.print(" admis: 1000 ml ");
         delay(2500);
-        volumSelectat = 50;
+        volumSelectat = 50; 
         lcd.clear();
       }
     } 
@@ -155,18 +161,36 @@ void loop() {
         lcd.clear();
       } else {
         greutateStart = greutateCurenta;
-        stareSistem = 2;
+        
+        float greutatePlastic = (greutateStart < 30.0) ? greutateStart : 15.0;
+        float apaDejaExistenta = greutateStart - greutatePlastic;
+        if (apaDejaExistenta < 0) apaDejaExistenta = 0;
+        
+        cantitateDeTurnat = (float)volumSelectat - apaDejaExistenta;
+        
+        if (cantitateDeTurnat <= 0) {
+          lcd.clear();
+          lcd.setCursor(0,0);
+          lcd.print("Sticla depaseste");
+          lcd.setCursor(0,1);
+          lcd.print("volumul setat!  ");
+          delay(2500);
+          lcd.clear();
+          return;
+        }
+
+        stareSistem = 2; 
         digitalWrite(pinReleu, HIGH);
         lcd.clear();
       }
     }
     else if (stareSistem == 2) {
-      stareSistem = 3;
+      stareSistem = 3; 
       digitalWrite(pinReleu, LOW);
       lcd.clear();
     }
     else if (stareSistem == 3) {
-      stareSistem = 2;
+      stareSistem = 2; 
       digitalWrite(pinReleu, HIGH);
       lcd.clear();
     }
@@ -176,7 +200,7 @@ void loop() {
     flagBtn2 = false;
     
     if (stareSistem == 0) {
-      stareSistem = 1;
+      stareSistem = 1; 
       lcd.clear();
     } else {
       modAfisaj = !modAfisaj;
@@ -187,14 +211,18 @@ void loop() {
   if (stareSistem == 2) {
     apaTurnataCurent = greutateCurenta - greutateStart;
     if (apaTurnataCurent < 0) apaTurnataCurent = 0;
-    if (apaTurnataCurent >= volumSelectat) {
+
+    if (apaTurnataCurent >= cantitateDeTurnat) {
       stareSistem = 4; 
       digitalWrite(pinReleu, LOW); 
       
-      totalApaZiMl += (unsigned long)volumSelectat; 
-      EEPROM.put(ADRESA_APA, totalApaZiMl);
+      totalApaZiMl += (unsigned long)cantitateDeTurnat; 
+      EEPROM.put(ADRESA_APA, totalApaZiMl); 
       
-      stingeToateLedurile();
+      for (int i = 0; i < numarLeduri; i++) {
+        digitalWrite(piniLed[i], HIGH);
+      }
+      
       lcd.clear();
     }
   }
@@ -202,20 +230,23 @@ void loop() {
   if (stareSistem == 4 && greutateCurenta < 10.0) {
     apaTurnataCurent = 0;
     greutateStart = 0;
-    stareSistem = 0;
+    cantitateDeTurnat = 0;
+    stareSistem = 0; 
     volumSelectat = 50; 
+    
+    stingeToateLedurile(); 
     lcd.clear();
   }
 
-  if ((stareSistem == 2 || stareSistem == 3) && apaTurnataCurent > 0) {
-    int leduriDeAprins = (apaTurnataCurent * numarLeduri) / volumSelectat;
+  if ((stareSistem == 2 || stareSistem == 3) && apaTurnataCurent > 0 && cantitateDeTurnat > 0) {
+    int leduriDeAprins = (apaTurnataCurent * numarLeduri) / cantitateDeTurnat;
     
     for (int i = 0; i < numarLeduri; i++) {
       if (i < leduriDeAprins) digitalWrite(piniLed[i], HIGH);
       else digitalWrite(piniLed[i], LOW);
     }
   }
-
+  
   if (millis() - ultimulRefreshLCD > 300) {
     ultimulRefreshLCD = millis();
 
@@ -248,8 +279,8 @@ void loop() {
         } 
         else if (stareSistem == 2 || stareSistem == 3) {
           lcd.setCursor(0, 0);
-          char rand0[17];
-          sprintf(rand0, "Tinta:  %4d ml ", volumSelectat);
+          char rand0[17]; 
+          sprintf(rand0, "Total:  %4d ml ", (int)cantitateDeTurnat);
           lcd.print(rand0);
 
           lcd.setCursor(0, 1);
