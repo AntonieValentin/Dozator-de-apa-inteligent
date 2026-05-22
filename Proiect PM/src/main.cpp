@@ -4,21 +4,23 @@
 #include <RTClib.h>
 #include <EEPROM.h>
 #include "HX711.h"
+#include <SoftPWM.h>
 
 RTC_DS3231 rtc;
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 HX711 scale;
 
-const int pinButon1 = 2; // PD2 / INT0 (Start/Stop/+50)
-const int pinButon2 = 3; // PD3 / INT1 (Schimbare Afișaj/OK)
-const int pinReleu = A1; // Pompa de apa
-const int pinDT = A2;    // HX711 Data
-const int pinSCK = A3;   // HX711 Clock
+const int pinButon1 = 2; 
+const int pinButon2 = 3; 
+const int pinReleu = A1; 
+const int pinDT = A2;    
+const int pinSCK = A3;   
 
 const int piniLed[] = {0, 1, 4, 5, 6, 7, 8, 9, 10, 11};
 const int numarLeduri = 10;
 
-const float FACTOR_CALIBRARE = 1135.0;
+const float FACTOR_CALIBRARE = 1135.0; 
+const float INERTIE_POMPA = 0.0;       
 
 int stareSistem = 0; 
 int volumSelectat = 50; 
@@ -58,9 +60,10 @@ void ISR_Btn2() {
   }
 }
 
+
 void stingeToateLedurile() {
   for (int i = 0; i < numarLeduri; i++) {
-    digitalWrite(piniLed[i], LOW);
+    SoftPWMSet(piniLed[i], 0); 
   }
 }
 
@@ -73,9 +76,10 @@ void setup() {
   pinMode(pinReleu, OUTPUT);
   digitalWrite(pinReleu, LOW);
 
+  SoftPWMBegin();
   for (int i = 0; i < numarLeduri; i++) {
-    pinMode(piniLed[i], OUTPUT);
-    digitalWrite(piniLed[i], LOW);
+    SoftPWMSetFadeTime(piniLed[i], 50, 50); 
+    SoftPWMSet(piniLed[i], 0);
   }
 
   Wire.begin();
@@ -196,6 +200,7 @@ void loop() {
     }
   }
 
+
   if (flagBtn2) {
     flagBtn2 = false;
     
@@ -212,7 +217,7 @@ void loop() {
     apaTurnataCurent = greutateCurenta - greutateStart;
     if (apaTurnataCurent < 0) apaTurnataCurent = 0;
 
-    if (apaTurnataCurent >= cantitateDeTurnat) {
+    if (apaTurnataCurent >= (cantitateDeTurnat - INERTIE_POMPA)) {
       stareSistem = 4; 
       digitalWrite(pinReleu, LOW); 
       
@@ -220,7 +225,7 @@ void loop() {
       EEPROM.put(ADRESA_APA, totalApaZiMl); 
       
       for (int i = 0; i < numarLeduri; i++) {
-        digitalWrite(piniLed[i], HIGH);
+        SoftPWMSet(piniLed[i], 255);
       }
       
       lcd.clear();
@@ -239,14 +244,31 @@ void loop() {
   }
 
   if ((stareSistem == 2 || stareSistem == 3) && apaTurnataCurent > 0 && cantitateDeTurnat > 0) {
-    int leduriDeAprins = (apaTurnataCurent * numarLeduri) / cantitateDeTurnat;
+    
+    float volumPerLed = cantitateDeTurnat / (float)numarLeduri;
+    
+    int leduriPline = (int)(apaTurnataCurent / volumPerLed);
+    
+    float restVolum = apaTurnataCurent - (leduriPline * volumPerLed);
+    
+    int valoarePWM = (int)((restVolum / volumPerLed) * 255.0);
+    
+    if (valoarePWM < 0) valoarePWM = 0;
+    if (valoarePWM > 255) valoarePWM = 255;
     
     for (int i = 0; i < numarLeduri; i++) {
-      if (i < leduriDeAprins) digitalWrite(piniLed[i], HIGH);
-      else digitalWrite(piniLed[i], LOW);
+      if (i < leduriPline) {
+        SoftPWMSet(piniLed[i], 255);
+      } 
+      else if (i == leduriPline) {
+        SoftPWMSet(piniLed[i], valoarePWM);
+      } 
+      else {
+        SoftPWMSet(piniLed[i], 0);
+      }
     }
   }
-  
+
   if (millis() - ultimulRefreshLCD > 300) {
     ultimulRefreshLCD = millis();
 
